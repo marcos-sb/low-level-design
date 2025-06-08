@@ -36,12 +36,18 @@ public class LoggedInUser extends User {
     private final List<JobPost> jobPosts;
 
     private final ConcurrentHashMap<User, List<Message>> threadsByUser;
+    private final List<Notification> notifications;
 
     public LoggedInUser() {
         this.pendingConnectionRequests = new ConcurrentSkipListSet<>(
             (pc1, pc2) -> pc1.compareTo(pc2)
         );
         this.jobPosts = Collections.synchronizedList(new ArrayList<>());
+
+        final var pendingNotifications = NotificationsManager.getInstance().getNotifications(this);
+        this.notifications = pendingNotifications.isEmpty()
+            ? Collections.synchronizedList(new ArrayList<>())
+            : Collections.synchronizedList(pendingNotifications);
     }
 
     public boolean add(Education education) {}
@@ -103,7 +109,7 @@ public class LoggedInUser extends User {
         if (!connections.contains(user)) {
             throw new IllegalStateException();
         }
-        threadsByUser.computeIfAbsent(user, new ArrayList<>())
+        threadsByUser.computeIfAbsent(user, k -> new ArrayList<>())
             .add(message);
     }
 }
@@ -137,3 +143,41 @@ public record Message {
 }
 
 public class Attachment {}
+
+public class NotificationManager {
+    private final ConcurrentMap<User, Boolean> listeners;
+    private final ConcurrentMap<User, List<Notification>> pendingNotificationsByUser;
+
+    public void newMessageTo(User user) {
+        handleNotification(user, new MessageNotification());
+    }
+
+    public void newConnectionTo(User user) {
+        handleNotification(user, new ConnectionNotification());
+    }
+
+    private void handleNotification(User user, Notification notification) {
+        if (listeners.containsKey(user)) {
+            user.addNotification(notification);
+        } else {
+            pendingNotificationsByUser.computeIfAbsent(user, k -> new ArrayList<>())
+                .add(notification);
+        }
+    }
+
+    public void addListener(User user) {
+        listeners.put(user, true);
+    }
+
+    public List<Notification> getPendingNotifications(User user) {
+        if (!pendingNotificationsByUser.containsKey(user)) {
+            return List.of();
+        }
+        return pendingNotificationsByUser.remove(user);
+    }
+}
+
+public abstract class Notification {}
+
+public class MessageNotification {}
+public class ConnectionRequest {}
