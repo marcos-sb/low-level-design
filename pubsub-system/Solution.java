@@ -1,9 +1,3 @@
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentSkipListSet;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicInteger;
-
 public class Topic {
 
     private final String name;
@@ -39,6 +33,7 @@ public interface Subscriber {
     void subscribe(List<Topic> topics);
     void unsubscribe(List<Topic> topics);
     void notify(Topic topic);
+    void close();
 }
 
 public class Publisher {
@@ -81,13 +76,20 @@ public class AsynchConcurrentSubscriber implements Subscriber {
 
     @Override
     public void notify(Topic topic) {
-        final var future = executorService.submit(() -> {
+        CompletableFuture.runAsync(() -> {
             final var subs = subscriptionsByTopic.get(topic);
             final var lastReadOffset = subs.getOffset();
             final var newMessages = topic.fetchMessages(lastReadOffset.get(), maxFetchSize);
             lastReadOffset.incrementAndGet(newMessages.size());
             processMessages(messages);
+        }, executorService).exceptionally(throwable -> {
+            logger.error(throwable);
         });
+    }
+
+    @Override
+    public void close() {
+        executorService.shutdown();
     }
 
     private void processMessages(List<Message> messages) {
