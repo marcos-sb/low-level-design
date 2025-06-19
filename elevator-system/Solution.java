@@ -16,9 +16,9 @@ public class System {
         this.scheduler = scheduler;
     }
 
-    public void gotoFloor(int floor) {
+    public void gotoFloor(int currentFloor, int floor) {
         final var elevator = scheduler.getElevator(floor);
-        elevator.accept(new Request(floor));
+        elevator.accept(new Request(currentFloor, floor));
     }
 }
 
@@ -53,17 +53,17 @@ public class LeastDistanceScheduler implements Scheduler {
             }
         }
 
-        var minResult = getMinima(candidates);
+        var minResult = getMinimum(candidates);
         if (minResult != null) {
-            return minResult;
+            return minResult.getMinDistanceElevator();
         }
 
-        minResult = getMinima(idle);
+        minResult = getMinimum(idle);
         if (minResult != null) {
-            return minResult;
+            return minResult.getMinDistanceElevator();
         }
 
-        return getMinima(other);
+        return getMinimum(other);
     }
 
     private static record MinResult {
@@ -71,7 +71,7 @@ public class LeastDistanceScheduler implements Scheduler {
         Elevator minDistanceElevator;
     }
 
-    private MinResult getMinima(List<Elevator> candidates) {
+    private MinResult getMinimum(List<Elevator> candidates) {
         var minDistance = Integer.MAX_VALUE;
         var minDistanceElevator = (Elevator) null;
         for (var elevator : candidates) {
@@ -88,33 +88,60 @@ public class LeastDistanceScheduler implements Scheduler {
     }
 }
 
-public record Elevator {
-    private volatile int currentFloor;
-    private volatile int destinationFloor;
-    private Direction direction;
-    private final ExecutorService executorService;
+public record Elevator (
+    int currentFloor,
+    Direction direction,
+    ExecutorService executorService) {
 
     public Elevator(int bottomFloor, int topFloor) {
         this.currentFloor = 0;
-        this.destinationFloor = 0;
         this.direction = Direction.IDLE;
         this.executorService = Executors.singleThreadExecutorService();
-        this.pendingFloorStops = boolean[topFloor - bottomFloor + 1];
     }
 
     public void accept(Request request) {
-        final var _floor = request.getFloor();
-        CompletableFuture.runAsync(() -> {
-            if (direction == IDLE) {
-                destinationFloor = _floor;
-                if (_floor < currentFloor) {
-                    moveDown();
-                }
-            }
-        }, executorService).exceptionally(exc -> {
-            logger.error(exc);
-            return null;
+        CompletableFuture.runAsync(new MoveTask(request) , executorService)
+            .exceptionally(exc -> {
+                exc.printStackTrace();
+                return null;
         });
+    }
+
+    private Direction fromDelta(int delta) {
+        return delta < 0 ? Direction.DOWN : 0 < delta ? Direction.UP : Direction.IDLE;
+    }
+
+    private void moveBy(int unit) {
+        if (direction.DOWN) {
+            --currentFloor;
+        } else if (direction.UP) {
+            ++currentFloor;
+        }
+    }
+
+    private static class MoveTask implements Runnable {
+        private final Request request;
+
+        private MoveTask(Request request) {
+            this.request = request;
+        }
+
+        @Override
+        public void run() {
+            final var deltaToFrom = from - currentFloor;
+            this.direction = fromDelta(deltaToFrom);
+            while (currentFloor != from) {
+                Thread.sleep();
+                move();
+            }
+
+            final var deltaToTo = to - currentFloor;
+            this.direction = fromDelta(deltaToTo);
+            while (currentFloor != to) {
+                Thread.sleep();
+                move();
+            }
+        }
     }
 }
 
@@ -122,8 +149,4 @@ public enum Direction {
     UP, DOWN, IDLE
 }
 
-public class Request {
-    public void gotoFloor(int floor) {
-
-    }
-}
+public record Request (int from, int to);
