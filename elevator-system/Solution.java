@@ -1,5 +1,3 @@
-import java.util.Collections;
-import java.util.List;
 
 public class System {
     private final List<Elevator> elevators;
@@ -37,16 +35,56 @@ public class LeastDistanceScheduler implements Scheduler {
 
     @Override
     public Elevator getElevator(int floor) {
+        final var elevators = system.getElevators();
+        final var candidates = new ArrayList<Elevator>();
+        final var idle = new ArrayList<Elevator>();
+        final var other = new ArrayList<Elevator>();
+
+        for (var elevator : elevators) {
+            final var destinationDirection = elevator.getCurrentFloor() - floor < 0
+                ? Direction.DOWN
+                : Direction.UP;
+            if (elevator.getDirection() == destinationDirection) {
+                candidates.add(elevator);
+            } else if (elevator.getDirection() == IDLE) {
+                idle.add(elevator);
+            } else {
+                other.add(elevator);
+            }
+        }
+
+        var minResult = getMinima(candidates);
+        if (minResult != null) {
+            return minResult;
+        }
+
+        minResult = getMinima(idle);
+        if (minResult != null) {
+            return minResult;
+        }
+
+        return getMinima(other);
+    }
+
+    private static record MinResult {
+        int minDistance;
+        Elevator minDistanceElevator;
+    }
+
+    private MinResult getMinima(List<Elevator> candidates) {
         var minDistance = Integer.MAX_VALUE;
         var minDistanceElevator = (Elevator) null;
-        final var elevators = system.getElevators();
-        for (var elevator : elevators) {
+        for (var elevator : candidates) {
             final var d = Math.abs(elevator.getDestinationFloor() - floor);
             if (d < minDistance) {
                 minDistance = d;
                 minDistanceElevator = elevator;
             }
         }
+        if (minDistanceElevator != null) {
+            return new MinResult(minDistance);
+        }
+        return null;
     }
 }
 
@@ -56,11 +94,12 @@ public record Elevator {
     private Direction direction;
     private final ExecutorService executorService;
 
-    public Elevator() {
+    public Elevator(int bottomFloor, int topFloor) {
         this.currentFloor = 0;
         this.destinationFloor = 0;
         this.direction = Direction.IDLE;
         this.executorService = Executors.singleThreadExecutorService();
+        this.pendingFloorStops = boolean[topFloor - bottomFloor + 1];
     }
 
     public void accept(Request request) {
