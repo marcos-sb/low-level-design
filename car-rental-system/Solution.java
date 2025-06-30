@@ -18,8 +18,9 @@ public class DriversLicenseInfo {
 }
 
 public class System {
-    private final ConcurrentMap<User, Reservation> reservationsByUser;
-    private final Inventory inventory;
+    private final ConcurrentMap<User, Set<Reservation>> reservationsByUser;
+    private final ConcurrentSkipListSet<Car> allCars;
+    private final ConcurrentMap<Date, Set<Car>> reservedCarsByDate;
 
     public System() {
         this.reservationsByUser = new ConcurrentHashMap<>();
@@ -27,38 +28,9 @@ public class System {
     }
 
     public List<Car> search(List<Filter> filters, int limit) {
-        return search(filters, limit);
-    }
-
-    public Reservation reserve(User user, Car car, Date start, Date end) {
-        synchronized (this) {
-            if (!inventory.available(start, end, car)) {
-                throw new IllegalStateException();
-            }
-            final var days = end - start;
-            final var totalPrice =
-            new Reservation(user, car, start, end, totalPrice);
-        }
-    }
-
-    public void modify(Reservation reservation) {}
-
-    public void cancel(Reservation reservation) {}
-}
-
-public class Inventory {
-    private final ConcurrentSkipListSet<Car> allCars;
-    private final ConcurrentMap<Date, Set<Car>> reservedCarsByDate;
-
-    public Inventory() {
-        this.allCars = new ConcurrentSkipListSet<>();
-        this.reservedCarsByDate = new ConcurrentHashMap<>();
-    }
-
-    public List<Car> search(List<Filter> filters, int limit) {
         final var filtered = new ArrayList<Car>(limit);
         OUTER:
-        for (var c : inventory.getAllCars()) {
+        for (var c : allCars) {
             for (var p : predicates) {
                 if (!p.test(c)) continue OUTER;
             }
@@ -77,6 +49,52 @@ public class Inventory {
     }
 
     private List<Date> between(Date start, Date end) {}
+
+    public Reservation reserve(User user, Car car, Date start, Date end) {
+        synchronized (reservationsByUser) {
+            if (!available(start, end, car) || !car.available())
+                throw new IllegalStateException();
+            final var days = ChronoUnit.DAYS.between(start, end);
+            final var totalPrice = car.pricePerDay() * days;
+            final var res = new Reservation(user, car, start, end, totalPrice);
+            reservationsByUser.computeIfAbsent(user, k -> new ConcurrentSkipListSet<>()).add(res);
+            car.setAvailable(false);
+            for (var d : between(start, end))
+                reservedCarsByDate.computeIfAbsent(d, k -> new ConcurrentSkipListSet<>()).add(car);
+        }
+    }
+
+    private void reserveDates(Date from, Date to, Car car) { }
+
+    public void modify(Reservation reservation, Reservation newReservation) {
+        synchronized (reservationsByUser) {
+            cancel(reservation);
+            reserve(reservation);
+        }
+    }
+
+    public void cancel(Reservation reservation) {
+        synchronized (reservationsByUser) {
+            final var reservations = reservationsByUser.get(reservation.user());
+            reservations.remove(reservation);
+            final var start = reservation.from();
+            final var end = reservation.to();
+            final var car = reservation.car();
+            for (var d : between(start, end))
+                reservedCarsByDate.get(d).remove(car);
+        }
+    }
+
+    private Reservation reserve(Reservation reservation) {
+        final var user = reservation.user();
+        final var car = reservation.car();
+        final var start = reservation.start();
+        final var end = reservation.end();
+        return reserve(user, car, start, end);
+    }
+}
+
+public class Inventory {
 }
 
 public class Car {
@@ -86,7 +104,7 @@ public class Car {
     private final String model;
     private final int year;
     private final String licensePlate;
-    private final boolean available;
+    private final volatile boolean available;
 
     private Money pricePerDay;
 }
