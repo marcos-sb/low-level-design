@@ -1,9 +1,8 @@
-import java.util.NoSuchElementException;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ConcurrentSkipListSet;
+public interface Observer {
+    void update(Auction auction);
+}
 
-public class User {
+public class User implements Observer {
 
     private final String email;
     private final String password;
@@ -20,6 +19,9 @@ public class User {
     public String password() {
         return password;
     }
+
+    @Override
+    public void update(Auction auction) {}
 }
 
 public class Item {
@@ -77,13 +79,24 @@ public class System {
 
     private final ConcurrentMap<Item.ID, Item> items;
     private final ConcurrentSkipListSet<Auction> auctions;
+    private final ScheduledExecutorService scheduler;
 
-    public System(ConcurrentHashMap<Item.ID, Item> items) {
+    public System(
+        ConcurrentHashMap<Item.ID, Item> items,
+        ConcurrentSkipListSet<Auction> auctions,
+        ScheduledExecutorService scheduler
+    ) {
         this.items = items;
+        this.auctions = auctions;
+        this.scheduler = scheduler;
     }
 
     public System() {
-        this(new ConcurrentHashMap<>());
+        this(
+            new ConcurrentHashMap<>(),
+            new ConcurrentSkipListSet<>(),
+            Executors.newScheduledThreadPool(1)
+        );
     }
 
     public Auction createAuction(Item item, User user) {
@@ -114,6 +127,12 @@ public class System {
             }
             items.put(item.id(), item);
             auctions.add(auction);
+            final var delay = Duration.between(Instant.now(), endTime);
+            scheduler.schedule(
+                Auction::end,
+                delay.getSeconds(),
+                TimeUnit.Seconds
+            );
         }
 
         return auction;
@@ -124,10 +143,13 @@ public class System {
     }
 
     public void placeBid(Auction auction, User user, String amount) {
-        if (Instant.now().isAfter(auction.endTime())) {
-            throw new IllegalStateException("Auction has ended");
+        if (!auction.isActive()) {
+            throw new IllegalStateException(
+                "Cannot place bid on inactive auction"
+            );
         }
 
+        // Or add a validate field to Auction class
         if (amount.compareTo(auction.minPrice()) < 0) {
             throw new IllegalArgumentException(
                 "Bid amount is below minimum price"
@@ -137,6 +159,10 @@ public class System {
         final var bid = new Bid(user, amount, Instant.now());
 
         auction.bids().add(bid);
+    }
+
+    public follow(Auction auction, User user) {
+        auction.follow(user);
     }
 }
 
@@ -151,6 +177,7 @@ public class Auction {
     private final String minPrice;
 
     private final ConcurrentSkipListSet<Bid> bids;
+    private final List<Observer> observers;
 
     public Auction(
         Item item,
@@ -158,8 +185,7 @@ public class Auction {
         Instant startTime,
         Instant endTime,
         String startingPrice,
-        String minPrice,
-        ConcurrentSkipListSet<Bid> bids
+        String minPrice
     ) {
         this.item = item;
         this.owner = owner;
@@ -171,37 +197,33 @@ public class Auction {
 
         this.startingPrice = startingPrice;
         this.minPrice = minPrice;
-        this.bids = bids;
-    }
-
-    public Auction(
-        Item item,
-        User owner,
-        Instant startTime,
-        Instant endTime,
-        String startingPrice,
-        String minPrice
-    ) {
-        this(
-            item,
-            owner,
-            startTime,
-            endTime,
-            startingPrice,
-            minPrice,
-            new ConcurrentSkipListSet<>((a, b) ->
-                a.amount().compareTo(b.amount())
-            )
+        this.bids = new ConcurrentSkipListSet<>((b1, b2) ->
+            b1.amount().compareTo(b2.amount())
         );
+        this.observers = Collections.synchronizedList(new ArrayList<>());
     }
 
-    public void end() {
+    public boolean isActive() {
+        return status == Status.ACTIVE;
+    }
+
+    public synchronized void end() {
         if (Instant.now().isBefore(endTime)) {
             throw new IllegalStateException(
                 "Auction cannot be ended before its end time"
             );
         }
         this.status = Status.ENDED;
+    }
+
+    public void follow(Observer observer) {
+        observers.add(observer);
+    }
+
+    private void notifyObservers() {
+        for (Observer observer : observers) {
+            observer.update(this);
+        }
     }
 
     public static enum Status {
